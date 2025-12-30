@@ -1,0 +1,56 @@
+CREATE OR REPLACE FUNCTION public.update_program_stats()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+            BEGIN
+                -- NEW REPORT
+                IF TG_OP = 'INSERT' THEN
+                    UPDATE bounty_programs 
+                    SET total_reports = total_reports + 1,
+                        pending_reports = pending_reports + 1
+                    WHERE id_prog = NEW.post_id;
+                    RETURN NEW;
+                END IF;
+
+                -- STATUS CHANGE
+                IF TG_OP = 'UPDATE' AND OLD."Status" IS DISTINCT FROM NEW."Status" THEN
+                    
+                    -- Remove old stats
+                    IF OLD."Status" = 'Pending' THEN
+                        UPDATE bounty_programs SET pending_reports = pending_reports - 1 WHERE id_prog = NEW.post_id;
+                    ELSIF OLD."Status" = 'Approved' THEN
+                        UPDATE bounty_programs SET approved_reports = approved_reports - 1 WHERE id_prog = NEW.post_id;
+                    ELSIF OLD."Status" IN ('Rejected', 'RejectedW') THEN
+                        UPDATE bounty_programs SET rejected_reports = rejected_reports - 1 WHERE id_prog = NEW.post_id;
+                    END IF;
+
+                    -- Apply new stats
+                    IF NEW."Status" = 'Pending' THEN
+                        UPDATE bounty_programs SET pending_reports = pending_reports + 1 WHERE id_prog = NEW.post_id;
+                    ELSIF NEW."Status" = 'Approved' THEN
+                        UPDATE bounty_programs 
+                        SET approved_reports = approved_reports + 1,
+                            total_bounties_paid = total_bounties_paid + COALESCE(ABS(NEW."Reward"::NUMERIC), 0)
+                        WHERE id_prog = NEW.post_id;
+                    ELSIF NEW."Status" IN ('Rejected', 'RejectedW') THEN
+                        UPDATE bounty_programs SET rejected_reports = rejected_reports + 1 WHERE id_prog = NEW.post_id;
+                    END IF;
+
+                    RETURN NEW;
+                END IF;
+
+                -- DELETE REPORT
+                IF TG_OP = 'DELETE' THEN
+                    UPDATE bounty_programs 
+                    SET total_reports = total_reports - 1,
+                        pending_reports = pending_reports - CASE WHEN OLD."Status" = 'Pending' THEN 1 ELSE 0 END,
+                        approved_reports = approved_reports - CASE WHEN OLD."Status" = 'Approved' THEN 1 ELSE 0 END,
+                        rejected_reports = rejected_reports - CASE WHEN OLD."Status" IN ('Rejected', 'RejectedW') THEN 1 ELSE 0 END,
+                        total_bounties_paid = total_bounties_paid - CASE WHEN OLD."Status" = 'Approved' THEN COALESCE(ABS(OLD."Reward"::NUMERIC), 0) ELSE 0 END
+                    WHERE id_prog = OLD.post_id;
+                    RETURN OLD;
+                END IF;
+
+                RETURN NULL;
+            END;
+            $function$
